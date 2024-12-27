@@ -1,0 +1,104 @@
+function processUnprocessedURLs() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var unprocessedSheet = ss.getSheetByName("Unprocessed");
+  var processedSheet = ss.getSheetByName("Processed");
+  var lastRow = unprocessedSheet.getLastRow();
+  
+  // Get all values from A2:B (both columns A and B together)
+  var data = unprocessedSheet.getRange(2, 1, lastRow - 1, 2).getValues(); // A2:B
+
+  // Get the current time to track elapsed time
+  var startTime = new Date().getTime();
+  var timeLimit = 5 * 60 * 1000; // 5 minutes in milliseconds
+
+  // Delete any previous triggers
+  deleteTriggers();
+
+  // Loop through each row in reverse order (to avoid row deletion issues)
+  for (var i = data.length - 1; i >= 0; i--) {
+    var id = data[i][0];  // A column value (ID)
+    var url = data[i][1]; // B column value (plain URL)
+
+    if (url) {
+      // Fetch and parse the URL to count 'banana.png', 'medi.png', and 'other.png'
+      var bananaCount = null, mediCount = null, otherCount = null;
+      try {
+        var result = fetchAndParse(url);
+        bananaCount = result.bananaCount > 0 ? result.bananaCount : ""; // Leave blank if count is zero
+        mediCount = result.mediCount > 0 ? result.mediCount : ""; // Leave blank if count is zero
+        otherCount = result.otherCount > 0 ? result.otherCount : ""; // Leave blank if count is zero
+      } catch (e) {
+        Logger.log("Error processing URL: " + url + " | " + e.message);
+        continue;
+      }
+
+      // Append the results to the "Processed" sheet
+      processedSheet.appendRow([id, url, bananaCount, mediCount, otherCount]);
+      
+      // Spreadsheet flush to ensure changes are applied before deleting
+      SpreadsheetApp.flush();
+
+      // Delete the row from the "Unprocessed" sheet (in reverse order, so no shifting occurs)
+      unprocessedSheet.deleteRow(i + 2); // +2 to account for 1-based index and header row
+
+      // Check if the 5-minute time limit has been reached
+      var elapsedTime = new Date().getTime() - startTime;
+      if (elapsedTime > timeLimit) {
+        Logger.log("Time limit reached. Stopping for now and will resume in 5 seconds.");
+        
+        // Set a trigger to rerun the function in 5 seconds if rows remain
+        if (unprocessedSheet.getLastRow() > 1) {
+          ScriptApp.newTrigger('processUnprocessedURLs')
+            .timeBased()
+            .after(5000) // 5 seconds
+            .create();
+        }
+        
+        return; // Exit the function to prevent running over time
+      }
+    }
+  }
+
+  // Final flush to apply any remaining changes
+  SpreadsheetApp.flush();
+  
+  // If no rows are left to process, log that the process is complete
+  if (unprocessedSheet.getLastRow() <= 1) {
+    Logger.log("All rows have been processed.");
+  }
+}
+
+// Function to delete any previous triggers
+function deleteTriggers() {
+  var allTriggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < allTriggers.length; i++) {
+    ScriptApp.deleteTrigger(allTriggers[i]);
+  }
+}
+
+function fetchAndParse(URL) {
+  try {
+    // Fetch the HTML content from the URL
+    var response = UrlFetchApp.fetch(URL);
+    var html = response.getContentText();
+
+    // Load the HTML into Cheerio for parsing
+    var $ = Cheerio.load(html);
+
+    // Count elements with src="banana.png", src="medi.png", and src="other.png"
+    var bananaCount = $('[src="banana.png"]').length;
+    var mediCount = $('[src="medi.png"]').length;
+    var otherCount = $('[src="other.png"]').length;
+
+    Logger.log('Banana count: ' + bananaCount + ' | Medi count: ' + mediCount + ' | Other count: ' + otherCount);
+
+    return {
+      bananaCount: bananaCount,
+      mediCount: mediCount,
+      otherCount: otherCount
+    };
+  } catch (e) {
+    Logger.log('Error: ' + e.toString());
+    throw e;  // Rethrow to handle it in the main function
+  }
+}
